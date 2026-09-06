@@ -28,6 +28,8 @@ pub use trackers::TrackerStorage;
 
 #[cfg(all(feature = "librqbit", not(feature = "libtorrent")))]
 use crate::backend::librqbit::LibrqbitBackend;
+#[cfg(all(feature = "librqbit", not(feature = "libtorrent")))]
+use crate::backend::priorities::EngineCacheConfig;
 #[cfg(feature = "libtorrent")]
 use crate::backend::libtorrent::LibtorrentBackend;
 

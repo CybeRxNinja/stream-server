@@ -1,0 +1,142 @@
+name: Fork Quick Release (librqbit, no libtorrent)
+
+# Lightweight maintained-fork release.
+# Builds the pure-Rust librqbit backend which has ZERO libtorrent dependency,
+# so it can never fail with:
+#   "libtorrent-rasterbar.so.2.0: cannot open shared object file"
+#
+# How to use:
+#   1. Go to Actions -> "Fork Quick Release" -> Run workflow -> enter version e.g. v0.1.8-fork.1
+#   2. Or push a tag: git tag v0.1.8-fork.1 && git push origin v0.1.8-fork.1
+#   3. Download `stream-server-linux-amd64-librqbit` from the created Release,
+#      chmod +x it, and run it. No libtorrent install needed.
+#
+# For full releases (Windows .exe/.msi, .deb, AppImage, Arch pkg, libtorrent-static
+# Linux) use "Release Build" workflow with a v* tag instead.
+
+on:
+  push:
+    tags: [ "fork-v*", "v*-fork*" ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag to create (e.g. v0.1.8-fork.1)"
+        required: true
+        default: "v0.1.8-fork.1"
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: 10
+  CARGO_HTTP_MULTIPLEXING: false
+
+jobs:
+  build-linux-librqbit:
+    name: Build Linux (librqbit)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install System Dependencies (no libtorrent needed)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev
+
+      - name: Build server (librqbit, pure Rust)
+        run: cargo build --release -p server --no-default-features --features librqbit
+
+      - name: Verify no libtorrent linkage
+        run: |
+          ls -lh target/release/server
+          echo "=== ldd (must NOT mention libtorrent) ==="
+          ldd target/release/server || true
+          if ldd target/release/server 2>/dev/null | grep -qi libtorrent; then
+            echo "::error::librqbit build unexpectedly links libtorrent"
+            exit 1
+          fi
+          echo "OK: pure-Rust build, no libtorrent runtime dep"
+
+      - name: Stage artifact
+        run: |
+          mkdir -p dist
+          cp target/release/server dist/stream-server-linux-amd64-librqbit
+          chmod +x dist/stream-server-linux-amd64-librqbit
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          ls -lh dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: quick-librqbit-linux
+          path: dist/*
+
+  release:
+    name: Create Quick Release
+    needs: [build-linux-librqbit]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: quick-librqbit-linux
+          path: release
+
+      - name: Resolve tag
+        id: reltag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.version }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $TAG"
+          PREV="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          echo "prev=$PREV" >> "$GITHUB_OUTPUT"
+
+      - name: Generate notes
+        run: |
+          cat > RELEASE_BODY.md << EOF
+          ## Stream Server ${{ steps.reltag.outputs.tag }} (maintained fork, quick librqbit build)
+
+          Pure-Rust **librqbit** build with **no libtorrent dependency**.
+          Use this if the default libtorrent build fails with:
+
+          \`\`\`
+          stream-server: error while loading shared libraries: libtorrent-rasterbar.so.2.0: cannot open shared object file
+          \`\`\`
+
+          ### Install (Linux x86_64)
+
+          \`\`\`bash
+          # Download from this release:
+          #   stream-server-linux-amd64-librqbit
+          chmod +x stream-server-linux-amd64-librqbit
+          ./stream-server-linux-amd64-librqbit
+          # server starts on http://localhost:11470
+          \`\`\`
+
+          Verify with \`SHA256SUMS.txt\`.
+
+          Fork: https://github.com/${{ github.repository }}
+          Upstream: https://github.com/stremio-native/stream-server
+          EOF
+          cat RELEASE_BODY.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.reltag.outputs.tag }}
+          files: release/*
+          body_path: RELEASE_BODY.md
+          generate_release_notes: false
+          prerelease: ${{ contains(steps.reltag.outputs.tag, 'beta') || contains(steps.reltag.outputs.tag, 'alpha') || contains(steps.reltag.outputs.tag, 'rc') }}

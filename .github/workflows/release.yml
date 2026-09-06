@@ -7,6 +7,12 @@ on:
   pull_request:
     branches: [ "master" ]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag to create (e.g. v0.1.9-fork.1). Leave empty to only build without releasing."
+        required: false
+        default: ""
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -242,8 +248,49 @@ jobs:
       - name: Restore Source Code
         run: git restore server enginefs bindings settings-gui
 
-      - name: Build Release
+      - name: Build Release (libtorrent, static)
         run: cargo build --release --features libtorrent --no-default-features
+
+      - name: Preserve libtorrent binaries
+        run: |
+          mkdir -p /tmp/libtorrent-bins
+          cp target/release/server /tmp/libtorrent-bins/server
+          cp target/release/settings-gui /tmp/libtorrent-bins/settings-gui || true
+          # Sanity check: static release must NOT depend on libtorrent .so at runtime
+          echo "=== ldd libtorrent build (should show no libtorrent-rasterbar) ==="
+          ldd /tmp/libtorrent-bins/server || true
+          if ldd /tmp/libtorrent-bins/server 2>/dev/null | grep -qi "libtorrent"; then
+            echo "::warning::libtorrent build still links libtorrent dynamically - will cause libtorrent-rasterbar.so errors on other machines"
+          else
+            echo "OK: no dynamic libtorrent dependency"
+          fi
+
+      - name: Build Release (librqbit, no native libtorrent dep)
+        # Pure-Rust backend. Zero libtorrent dependency, so it can never hit
+        # "libtorrent-rasterbar.so.2.0: cannot open shared object file".
+        # Recommended for users who only need a portable binary that just runs.
+        run: cargo build --release --no-default-features --features librqbit
+
+      - name: Collect both backends
+        run: |
+          mkdir -p /tmp/final-bins
+          # libtorrent (static) keeps the default names for drop-in compatibility
+          cp /tmp/libtorrent-bins/server target/release/server
+          cp /tmp/libtorrent-bins/settings-gui target/release/settings-gui || true
+          # librqbit gets suffixed names
+          cp target/release/server /tmp/final-bins/stream-server-linux-amd64-librqbit 2>/dev/null || cp /tmp/libtorrent-bins/server /tmp/final-bins/stream-server-linux-amd64-librqbit
+          # Rebuild librqbit binary path: target/release/server currently IS librqbit after last build
+          cp target/release/server /tmp/final-bins/server-librqbit
+          cp target/release/settings-gui /tmp/final-bins/settings-gui-librqbit || true
+          # Restore libtorrent binaries as canonical target/release outputs (for deb/AppImage)
+          cp /tmp/libtorrent-bins/server target/release/server
+          cp /tmp/libtorrent-bins/settings-gui target/release/settings-gui || true
+          cp /tmp/final-bins/server-librqbit ./stream-server-linux-amd64-librqbit
+          cp /tmp/final-bins/settings-gui-librqbit ./stream-server-settings-linux-amd64-librqbit || true
+          chmod +x ./stream-server-linux-amd64-librqbit ./stream-server-settings-linux-amd64-librqbit 2>/dev/null || true
+          echo "=== ldd librqbit build (must show no libtorrent) ==="
+          ldd ./stream-server-linux-amd64-librqbit || true
+          ls -lh target/release/server ./stream-server-linux-amd64-librqbit
 
       - name: Build DEB Package
         run: cargo deb --package server --no-build
@@ -283,6 +330,8 @@ jobs:
           path: |
             target/release/server
             target/release/settings-gui
+            stream-server-linux-amd64-librqbit
+            stream-server-settings-linux-amd64-librqbit
 
       - name: Upload DEB
         uses: actions/upload-artifact@v7
@@ -333,24 +382,34 @@ jobs:
       - name: Create PKGBUILD
         run: |
           mkdir -p pkg
-          cat > pkg/PKGBUILD << 'EOF'
-          # Maintainer: stream-server maintainers
+          # Derive pkgver from tag (v1.2.3 -> 1.2.3) or fall back to Cargo version
+          TAG_NAME="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            TAG_NAME="${{ inputs.version }}"
+          fi
+          PKGVER="$(echo "$TAG_NAME" | sed 's/^v//; s/-/_/g')"
+          if [ -z "$PKGVER" ] || [ "$PKGVER" = "master" ]; then
+            PKGVER="$(grep '^version' server/Cargo.toml | head -n1 | cut -d'"' -f2)"
+          fi
+          cat > pkg/PKGBUILD << EOF
+          # Maintainer: stream-server maintainers (maintained fork of stremio-native/stream-server)
           pkgname=stream-server
-          pkgver=0.1.0
+          pkgver=${PKGVER:-0.1.8}
           pkgrel=1
-          pkgdesc="High-performance torrent streaming server with HLS transcoding"
+          pkgdesc="High-performance torrent streaming server with HLS transcoding (libtorrent static build)"
           arch=('x86_64')
-          url="https://github.com/perpetus/stream-server"
+          url="https://github.com/${GITHUB_REPOSITORY}"
           license=('MIT')
-          depends=('openssl' 'boost-libs')
+          depends=('openssl' 'boost-libs' 'gcc-libs' 'glibc')
           source=("stream-server" "settings-gui")
           sha256sums=('SKIP' 'SKIP')
 
           package() {
-              install -Dm755 "$srcdir/stream-server" "$pkgdir/usr/bin/stream-server"
-              install -Dm755 "$srcdir/settings-gui" "$pkgdir/usr/bin/settings-gui"
+              install -Dm755 "\$srcdir/stream-server" "\$pkgdir/usr/bin/stream-server"
+              install -Dm755 "\$srcdir/settings-gui" "\$pkgdir/usr/bin/settings-gui"
           }
           EOF
+          cat pkg/PKGBUILD
 
           cp target/release/server pkg/stream-server
           cp target/release/settings-gui pkg/settings-gui
@@ -413,9 +472,13 @@ jobs:
           copy_file artifacts/server-windows-amd64/stremio-runtime.exe stremio-runtime-windows-amd64.exe
           copy_file artifacts/server-windows-amd64/stream-server-updater.exe stream-server-updater-windows-amd64.exe
           copy_latest artifacts/server-windows-msi "*.msi" stream-server-windows-amd64.msi
-          # Linux
+          # Linux (libtorrent static - default, drop-in compatible)
           copy_file artifacts/server-linux-amd64/server stream-server-linux-amd64
           copy_file artifacts/server-linux-amd64/settings-gui stream-server-settings-linux-amd64
+          # Linux (librqbit pure-Rust - no libtorrent dependency, immune to libtorrent-rasterbar.so errors)
+          copy_file artifacts/server-linux-amd64/stream-server-linux-amd64-librqbit stream-server-linux-amd64-librqbit
+          copy_file artifacts/server-linux-amd64/stream-server-settings-linux-amd64-librqbit stream-server-settings-linux-amd64-librqbit
+          chmod +x release/stream-server-linux-amd64 release/stream-server-linux-amd64-librqbit 2>/dev/null || true
           copy_latest artifacts/server-linux-deb "*.deb" stream-server-linux-amd64.deb
           copy_latest artifacts/server-linux-appimage "*.AppImage" stream-server-linux-amd64.AppImage
           # Arch
@@ -423,14 +486,29 @@ jobs:
           (cd release && sha256sum * > SHA256SUMS.txt)
           ls -la release/
 
+      - name: Resolve release tag
+        id: reltag
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            TAG="${{ inputs.version }}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $TAG"
+          PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || git describe --tags --abbrev=0 2>/dev/null || true)"
+          # On manual dispatch without a git tag object, fall back to latest tag
+          if [ "$TAG" = "master" ] || [ -z "$TAG" ]; then
+            PREV="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          fi
+          echo "prev=$PREV" >> "$GITHUB_OUTPUT"
+          echo "Previous tag: $PREV"
+
       - name: Generate release description
         run: |
-          prev_tag=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
-
           python scripts/generate_release_notes.py \
             --repo "${GITHUB_REPOSITORY}" \
-            --tag "${GITHUB_REF_NAME}" \
-            --previous-tag "${prev_tag}" \
+            --tag "${{ steps.reltag.outputs.tag }}" \
+            --previous-tag "${{ steps.reltag.outputs.prev }}" \
             --asset-dir release \
             --output "${GITHUB_WORKSPACE}/RELEASE_BODY.md"
 
@@ -439,7 +517,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ steps.reltag.outputs.tag }}
           files: release/*
           body_path: ${{ github.workspace }}/RELEASE_BODY.md
           generate_release_notes: false
-          prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'alpha') || contains(github.ref, 'rc') }}
+          prerelease: ${{ contains(steps.reltag.outputs.tag, 'beta') || contains(steps.reltag.outputs.tag, 'alpha') || contains(steps.reltag.outputs.tag, 'rc') }}

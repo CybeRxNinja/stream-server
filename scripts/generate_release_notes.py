@@ -17,16 +17,18 @@ hardware-accelerated transcoding, and an embedded HTTP server."""
 
 
 ASSET_LABELS = {
-    "stream-server-windows-amd64.exe": "Windows portable",
+    "stream-server-windows-amd64.exe": "Windows portable (libtorrent, static)",
     "stream-server-settings-windows-amd64.exe": "Windows settings GUI",
     "stream-server-windows-amd64.msi": "Windows installer",
     "stremio-runtime-windows-amd64.exe": "Windows Stremio runtime",
     "stream-server-updater-windows-amd64.exe": "Windows updater",
-    "stream-server-linux-amd64.deb": "Debian / Ubuntu",
-    "stream-server-linux-amd64": "Linux portable",
+    "stream-server-linux-amd64.deb": "Debian / Ubuntu (.deb, libtorrent static)",
+    "stream-server-linux-amd64": "Linux portable (libtorrent, static)",
     "stream-server-settings-linux-amd64": "Linux settings GUI",
     "stream-server-linux-amd64.AppImage": "Linux AppImage",
     "stream-server-arch-x86_64.pkg.tar.zst": "Arch Linux",
+    "stream-server-linux-amd64-librqbit": "Linux portable (librqbit, no libtorrent dep)",
+    "stream-server-settings-linux-amd64-librqbit": "Linux settings GUI (librqbit build)",
     "SHA256SUMS.txt": "Checksums",
 }
 
