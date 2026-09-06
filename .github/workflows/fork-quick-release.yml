@@ -1,22 +1,28 @@
-name: Fork Quick Release (librqbit, no libtorrent)
+name: Fork Quick Release (Linux static)
 
-# Lightweight maintained-fork release.
-# Builds the pure-Rust librqbit backend which has ZERO libtorrent dependency,
-# so it can never fail with:
+# Fast maintained-fork release for Linux x86_64.
+# Builds libtorrent 2.1.1 from source with BUILD_SHARED_LIBS=OFF and
+# LIBTORRENT_STATIC=1, so the portable binary has NO
+# libtorrent-rasterbar.so runtime dependency and can never fail with:
 #   "libtorrent-rasterbar.so.2.0: cannot open shared object file"
 #
-# How to use:
-#   1. Go to Actions -> "Fork Quick Release" -> Run workflow -> enter version e.g. v0.1.8-fork.1
-#   2. Or push a tag: git tag v0.1.8-fork.1 && git push origin v0.1.8-fork.1
-#   3. Download `stream-server-linux-amd64-librqbit` from the created Release,
-#      chmod +x it, and run it. No libtorrent install needed.
+# NOTE: server binary does not yet support a pure librqbit build upstream
+# (server calls EngineFS::new_disk_backed/new_with_storage which only exist
+# for LibtorrentBackend, and server/Cargo.toml enables enginefs defaults).
+# enginefs library librqbit support was fixed in this fork, but the server
+# quick release intentionally uses static libtorrent for reliability.
 #
-# For full releases (Windows .exe/.msi, .deb, AppImage, Arch pkg, libtorrent-static
-# Linux) use "Release Build" workflow with a v* tag instead.
+# How to use:
+#   1. Actions -> "Fork Quick Release (Linux static)" -> Run workflow -> version e.g. v0.1.8-fork.1
+#   2. Or push a tag: git tag v0.1.8-fork.1 && git push origin v0.1.8-fork.1
+#   3. Download `stream-server-linux-amd64` from the Release, chmod +x, run.
+#
+# Full multi-OS release (Windows .exe/.msi, .deb, AppImage, Arch pkg):
+# use "Release Build" workflow with a v* tag instead.
 
 on:
   push:
-    tags: [ "fork-v*", "v*-fork*" ]
+    tags: [ "fork-v*", "v*-fork*", "v*" ]
   workflow_dispatch:
     inputs:
       version:
@@ -29,10 +35,12 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_NET_RETRY: 10
   CARGO_HTTP_MULTIPLEXING: false
+  LIBTORRENT_STATIC: "1"
+  PKG_CONFIG_PATH: /usr/local/lib/pkgconfig
 
 jobs:
-  build-linux-librqbit:
-    name: Build Linux (librqbit)
+  build-linux-static:
+    name: Build Linux (libtorrent static)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -40,45 +48,45 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install System Dependencies (no libtorrent needed)
-        # server still links tray-icon/gtk via tao + settings-gui on Linux,
-        # so gtk/glib headers are required even for the pure-Rust librqbit build.
-        # Mirrors build-linux in release.yml minus libtorrent/boost/cmake deps.
+      - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libssl-dev libgtk-3-dev libayatana-appindicator3-dev libclang-dev
+          sudo apt-get install -y build-essential cmake curl pkg-config libssl-dev libgtk-3-dev libayatana-appindicator3-dev libclang-dev
 
-      - name: Build server (librqbit, pure Rust)
-        run: cargo build --release -p server --no-default-features --features librqbit
+      - name: Install libtorrent 2.1.1 (static)
+        run: bash .github/scripts/install-libtorrent.sh
 
-      - name: Verify no libtorrent linkage
+      - name: Build server (libtorrent, static)
+        run: cargo build --release -p server --features libtorrent --no-default-features
+
+      - name: Verify static linkage (no libtorrent .so)
         run: |
           ls -lh target/release/server
           echo "=== ldd (must NOT mention libtorrent) ==="
           ldd target/release/server || true
           if ldd target/release/server 2>/dev/null | grep -qi libtorrent; then
-            echo "::error::librqbit build unexpectedly links libtorrent"
+            echo "::error::binary still links libtorrent dynamically - will fail with libtorrent-rasterbar.so errors"
             exit 1
           fi
-          echo "OK: pure-Rust build, no libtorrent runtime dep"
+          echo "OK: static build, no libtorrent runtime dep"
 
       - name: Stage artifact
         run: |
           mkdir -p dist
-          cp target/release/server dist/stream-server-linux-amd64-librqbit
-          chmod +x dist/stream-server-linux-amd64-librqbit
+          cp target/release/server dist/stream-server-linux-amd64
+          chmod +x dist/stream-server-linux-amd64
           (cd dist && sha256sum * > SHA256SUMS.txt)
           ls -lh dist/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: quick-librqbit-linux
+          name: quick-linux-static
           path: dist/*
 
   release:
     name: Create Quick Release
-    needs: [build-linux-librqbit]
+    needs: [build-linux-static]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -90,7 +98,7 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@v8
         with:
-          name: quick-librqbit-linux
+          name: quick-linux-static
           path: release
 
       - name: Resolve tag
@@ -103,16 +111,14 @@ jobs:
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Release tag: $TAG"
-          PREV="$(git describe --tags --abbrev=0 2>/dev/null || true)"
-          echo "prev=$PREV" >> "$GITHUB_OUTPUT"
 
       - name: Generate notes
         run: |
           cat > RELEASE_BODY.md << EOF
-          ## Stream Server ${{ steps.reltag.outputs.tag }} (maintained fork, quick librqbit build)
+          ## Stream Server ${{ steps.reltag.outputs.tag }} (maintained fork, Linux static)
 
-          Pure-Rust **librqbit** build with **no libtorrent dependency**.
-          Use this if the default libtorrent build fails with:
+          Static libtorrent 2.1.1 build with **no libtorrent-rasterbar.so runtime dependency**.
+          Fixes:
 
           \`\`\`
           stream-server: error while loading shared libraries: libtorrent-rasterbar.so.2.0: cannot open shared object file
@@ -121,10 +127,9 @@ jobs:
           ### Install (Linux x86_64)
 
           \`\`\`bash
-          # Download from this release:
-          #   stream-server-linux-amd64-librqbit
-          chmod +x stream-server-linux-amd64-librqbit
-          ./stream-server-linux-amd64-librqbit
+          # Download stream-server-linux-amd64 from this release
+          chmod +x stream-server-linux-amd64
+          ./stream-server-linux-amd64
           # server starts on http://localhost:11470
           \`\`\`
 

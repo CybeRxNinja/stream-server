@@ -8,9 +8,9 @@ Fork: this repository (`CybeRxNinja/stream-server`)
 Goals of this fork:
 
 - Keep `Cargo.lock` / Rust dependencies updated (`cargo update`).
-- Fix backend-specific build breakage (e.g. `librqbit`-only build).
-- Ship **static** Linux binaries + a **pure-Rust librqbit** binary so users never hit
-  `libtorrent-rasterbar.so.2.0` runtime errors.
+- Fix backend-specific build breakage (e.g. `enginefs` librqbit-only build).
+- Ship **static** Linux binaries so users never hit
+  `libtorrent-rasterbar.so.2.0` runtime errors (`ldd` shows no libtorrent dep).
 - Provide one-click GitHub Releases with downloadable install files
   (portable binary, `.deb`, `AppImage`, Arch `.pkg.tar.zst`, Windows `.exe`/`.msi`).
 
@@ -41,17 +41,21 @@ ldd ./stream-server | grep -i torrent
 
 ### Option A — download a fixed release from this fork (recommended)
 
-- **No libtorrent needed at all:** download `stream-server-linux-amd64-librqbit`
-  from the latest GitHub Release. Pure Rust, zero native torrent dep.
-  ```bash
-  chmod +x stream-server-linux-amd64-librqbit
-  ./stream-server-linux-amd64-librqbit
-  ```
-- **Full features (libtorrent, but static):** download `stream-server-linux-amd64`,
-  `stream-server-linux-amd64.deb`, `stream-server-linux-amd64.AppImage`, or
-  `stream-server-arch-x86_64.pkg.tar.zst`. These are built in CI with
-  `LIBTORRENT_STATIC=1` + libtorrent 2.1.1 from source (`BUILD_SHARED_LIBS=OFF`),
-  so `ldd` shows no `libtorrent-rasterbar.so` dependency.
+Download `stream-server-linux-amd64`, `stream-server-linux-amd64.deb`,
+`stream-server-linux-amd64.AppImage`, or `stream-server-arch-x86_64.pkg.tar.zst`.
+These are built in CI with `LIBTORRENT_STATIC=1` + libtorrent 2.1.1 from source
+(`BUILD_SHARED_LIBS=OFF`), so `ldd` shows no `libtorrent-rasterbar.so` dependency.
+```bash
+chmod +x stream-server-linux-amd64
+./stream-server-linux-amd64
+# server starts on http://localhost:11470
+```
+
+Note: `server` binary does not yet support a pure librqbit build upstream
+(`EngineFS::new_disk_backed`/`new_with_storage` only exist for `LibtorrentBackend`,
+and `server/Cargo.toml` enables `enginefs` defaults). This fork fixed
+`enginefs --no-default-features --features librqbit` library builds, but
+releases use static libtorrent for reliability.
 
 Releases page: `https://github.com/<this-fork>/releases/latest`
 (`<this-fork>` = the fork owner/repo you are reading now).
@@ -78,20 +82,25 @@ bash .github/scripts/install-libtorrent.sh
 LIBTORRENT_STATIC=1 PKG_CONFIG_PATH=/usr/local/lib/pkgconfig cargo build --release --features libtorrent --no-default-features
 ```
 
-### Option C — build the pure-Rust backend yourself (no C++)
+### Option C — build the static backend yourself
 
 ```bash
-cargo build --release -p server --no-default-features --features librqbit
+bash .github/scripts/install-libtorrent.sh
+LIBTORRENT_STATIC=1 PKG_CONFIG_PATH=/usr/local/lib/pkgconfig cargo build --release -p server --features libtorrent --no-default-features
+ldd target/release/server | grep -i torrent || echo "OK: static, no runtime libtorrent dep"
 ./target/release/server
 ```
 
+`cargo build -p server --no-default-features --features librqbit` is NOT yet
+supported for the server binary (only `enginefs` library builds with that flag).
+
 ## How to cut a release from this fork
 
-### Quick release (fast, Linux librqbit only, ~10 min)
+### Quick release (Linux static only, ~10-12 min)
 
 Best when you just need a working Linux binary *now*.
 
-- Via UI: **Actions → “Fork Quick Release (librqbit, no libtorrent)” → Run workflow →**
+- Via UI: **Actions → “Fork Quick Release (Linux static)” → Run workflow →**
   enter `version` e.g. `v0.1.8-fork.1` → Run.
 - Via tag:
   ```bash
@@ -99,12 +108,12 @@ Best when you just need a working Linux binary *now*.
   # or: git tag fork-v1 && git push origin fork-v1
   ```
 
-Result: a GitHub Release with `stream-server-linux-amd64-librqbit` + `SHA256SUMS.txt`.
+Result: a GitHub Release with `stream-server-linux-amd64` + `SHA256SUMS.txt`.
 
 ### Full release (all platforms, ~40-60 min)
 
-Builds Windows `.exe`/`.msi`, Linux portable/`.deb`/`AppImage` (both libtorrent-static
-*and* librqbit), and Arch `.pkg.tar.zst`.
+Builds Windows `.exe`/`.msi`, Linux portable/`.deb`/`AppImage` (libtorrent-static),
+and Arch `.pkg.tar.zst`.
 
 - Via UI: **Actions → “Release Build” → Run workflow →** optionally enter `version`
   e.g. `v0.1.9-fork.1` → Run.
@@ -122,12 +131,11 @@ Then download from **Releases** (or from the run's Artifacts while it builds).
   `tokio 1.52→1.53`, `cxx 1.0.194→1.0.200`, `quick-xml 0.39→0.41`, etc.).
 - Fixed in this fork vs upstream `master` (`f585ab6`):
   - `enginefs/src/lib.rs`: missing `EngineCacheConfig` import broke
-    `--no-default-features --features librqbit` builds (CI only tested libtorrent).
-  - `scripts/generate_release_notes.py`: added librqbit asset labels.
+    `enginefs --no-default-features --features librqbit` library builds (CI only tested libtorrent).
   - `.github/workflows/release.yml`: manual `version` input, tag resolution,
-    dual libtorrent-static + librqbit Linux builds with `ldd` guards,
-    dynamic Arch `pkgver`/`url`, release includes librqbit binaries.
-  - Added `.github/workflows/fork-quick-release.yml` for fast librqbit-only releases.
+    static-link `ldd` guard (fails if binary still needs libtorrent .so),
+    dynamic Arch `pkgver`/`url`.
+  - Added `.github/workflows/fork-quick-release.yml` for fast Linux static releases.
 - libtorrent stays pinned at **2.1.1** (matches Arch `extra` 2.1.1 and
   `vcpkg.json` baseline `84bab45d...`). Bump only together in
   `vcpkg.json`, `.github/scripts/install-libtorrent.sh`, and `bindings/libtorrent-sys/build.rs`

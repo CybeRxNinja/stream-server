@@ -251,46 +251,20 @@ jobs:
       - name: Build Release (libtorrent, static)
         run: cargo build --release --features libtorrent --no-default-features
 
-      - name: Preserve libtorrent binaries
+      - name: Verify static linkage (no libtorrent .so runtime dep)
+        # This is the fix for "libtorrent-rasterbar.so.2.0: cannot open shared object file".
+        # CI builds libtorrent 2.1.1 from source with BUILD_SHARED_LIBS=OFF and
+        # LIBTORRENT_STATIC=1, so `ldd` must show no libtorrent dependency.
         run: |
-          mkdir -p /tmp/libtorrent-bins
-          cp target/release/server /tmp/libtorrent-bins/server
-          cp target/release/settings-gui /tmp/libtorrent-bins/settings-gui || true
-          # Sanity check: static release must NOT depend on libtorrent .so at runtime
-          echo "=== ldd libtorrent build (should show no libtorrent-rasterbar) ==="
-          ldd /tmp/libtorrent-bins/server || true
-          if ldd /tmp/libtorrent-bins/server 2>/dev/null | grep -qi "libtorrent"; then
-            echo "::warning::libtorrent build still links libtorrent dynamically - will cause libtorrent-rasterbar.so errors on other machines"
+          ls -lh target/release/server target/release/settings-gui || true
+          echo "=== ldd (must show no libtorrent-rasterbar) ==="
+          ldd target/release/server || true
+          if ldd target/release/server 2>/dev/null | grep -qi "libtorrent"; then
+            echo "::error::Linux binary still links libtorrent dynamically - will fail on machines without exact .so version"
+            exit 1
           else
             echo "OK: no dynamic libtorrent dependency"
           fi
-
-      - name: Build Release (librqbit, no native libtorrent dep)
-        # Pure-Rust backend. Zero libtorrent dependency, so it can never hit
-        # "libtorrent-rasterbar.so.2.0: cannot open shared object file".
-        # Recommended for users who only need a portable binary that just runs.
-        run: cargo build --release --no-default-features --features librqbit
-
-      - name: Collect both backends
-        run: |
-          mkdir -p /tmp/final-bins
-          # libtorrent (static) keeps the default names for drop-in compatibility
-          cp /tmp/libtorrent-bins/server target/release/server
-          cp /tmp/libtorrent-bins/settings-gui target/release/settings-gui || true
-          # librqbit gets suffixed names
-          cp target/release/server /tmp/final-bins/stream-server-linux-amd64-librqbit 2>/dev/null || cp /tmp/libtorrent-bins/server /tmp/final-bins/stream-server-linux-amd64-librqbit
-          # Rebuild librqbit binary path: target/release/server currently IS librqbit after last build
-          cp target/release/server /tmp/final-bins/server-librqbit
-          cp target/release/settings-gui /tmp/final-bins/settings-gui-librqbit || true
-          # Restore libtorrent binaries as canonical target/release outputs (for deb/AppImage)
-          cp /tmp/libtorrent-bins/server target/release/server
-          cp /tmp/libtorrent-bins/settings-gui target/release/settings-gui || true
-          cp /tmp/final-bins/server-librqbit ./stream-server-linux-amd64-librqbit
-          cp /tmp/final-bins/settings-gui-librqbit ./stream-server-settings-linux-amd64-librqbit || true
-          chmod +x ./stream-server-linux-amd64-librqbit ./stream-server-settings-linux-amd64-librqbit 2>/dev/null || true
-          echo "=== ldd librqbit build (must show no libtorrent) ==="
-          ldd ./stream-server-linux-amd64-librqbit || true
-          ls -lh target/release/server ./stream-server-linux-amd64-librqbit
 
       - name: Build DEB Package
         run: cargo deb --package server --no-build
@@ -330,8 +304,6 @@ jobs:
           path: |
             target/release/server
             target/release/settings-gui
-            stream-server-linux-amd64-librqbit
-            stream-server-settings-linux-amd64-librqbit
 
       - name: Upload DEB
         uses: actions/upload-artifact@v7
@@ -472,13 +444,10 @@ jobs:
           copy_file artifacts/server-windows-amd64/stremio-runtime.exe stremio-runtime-windows-amd64.exe
           copy_file artifacts/server-windows-amd64/stream-server-updater.exe stream-server-updater-windows-amd64.exe
           copy_latest artifacts/server-windows-msi "*.msi" stream-server-windows-amd64.msi
-          # Linux (libtorrent static - default, drop-in compatible)
+          # Linux (libtorrent static - no libtorrent-rasterbar.so runtime dep)
           copy_file artifacts/server-linux-amd64/server stream-server-linux-amd64
           copy_file artifacts/server-linux-amd64/settings-gui stream-server-settings-linux-amd64
-          # Linux (librqbit pure-Rust - no libtorrent dependency, immune to libtorrent-rasterbar.so errors)
-          copy_file artifacts/server-linux-amd64/stream-server-linux-amd64-librqbit stream-server-linux-amd64-librqbit
-          copy_file artifacts/server-linux-amd64/stream-server-settings-linux-amd64-librqbit stream-server-settings-linux-amd64-librqbit
-          chmod +x release/stream-server-linux-amd64 release/stream-server-linux-amd64-librqbit 2>/dev/null || true
+          chmod +x release/stream-server-linux-amd64 2>/dev/null || true
           copy_latest artifacts/server-linux-deb "*.deb" stream-server-linux-amd64.deb
           copy_latest artifacts/server-linux-appimage "*.AppImage" stream-server-linux-amd64.AppImage
           # Arch

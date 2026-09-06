@@ -27,8 +27,6 @@ ASSET_LABELS = {
     "stream-server-settings-linux-amd64": "Linux settings GUI",
     "stream-server-linux-amd64.AppImage": "Linux AppImage",
     "stream-server-arch-x86_64.pkg.tar.zst": "Arch Linux",
-    "stream-server-linux-amd64-librqbit": "Linux portable (librqbit, no libtorrent dep)",
-    "stream-server-settings-linux-amd64-librqbit": "Linux settings GUI (librqbit build)",
     "SHA256SUMS.txt": "Checksums",
 }
 
