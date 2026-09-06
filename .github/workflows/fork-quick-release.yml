@@ -2,9 +2,15 @@ name: Fork Quick Release (Linux static)
 
 # Fast maintained-fork release for Linux x86_64.
 # Builds libtorrent 2.1.1 from source with BUILD_SHARED_LIBS=OFF and
-# LIBTORRENT_STATIC=1, so the portable binary has NO
+# LIBTORRENT_STATIC=1, so binaries have NO
 # libtorrent-rasterbar.so runtime dependency and can never fail with:
 #   "libtorrent-rasterbar.so.2.0: cannot open shared object file"
+#
+# Produces:
+#   - stream-server-linux-amd64 (portable, static)
+#   - stream-server-linux-amd64.AppImage (portable, static)
+#   - stream-server-arch-x86_64.pkg.tar.zst (Arch Linux)
+#   - SHA256SUMS.txt
 #
 # NOTE: server binary does not yet support a pure librqbit build upstream
 # (server calls EngineFS::new_disk_backed/new_with_storage which only exist
@@ -13,9 +19,9 @@ name: Fork Quick Release (Linux static)
 # quick release intentionally uses static libtorrent for reliability.
 #
 # How to use:
-#   1. Actions -> "Fork Quick Release (Linux static)" -> Run workflow -> version e.g. v0.1.8-fork.1
-#   2. Or push a tag: git tag v0.1.8-fork.1 && git push origin v0.1.8-fork.1
-#   3. Download `stream-server-linux-amd64` from the Release, chmod +x, run.
+#   1. Actions -> "Fork Quick Release (Linux static)" -> Run workflow -> version e.g. v0.1.8-fork.2
+#   2. Or push a tag: git tag v0.1.8-fork.2 && git push origin v0.1.8-fork.2
+#   3. Download portable / AppImage / Arch pkg from the Release, see notes below.
 #
 # Full multi-OS release (Windows .exe/.msi, .deb, AppImage, Arch pkg):
 # use "Release Build" workflow with a v* tag instead.
@@ -51,7 +57,7 @@ jobs:
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake curl pkg-config libssl-dev libboost-dev libgtk-3-dev libayatana-appindicator3-dev libclang-dev
+          sudo apt-get install -y build-essential cmake curl pkg-config libssl-dev libboost-dev libgtk-3-dev libayatana-appindicator3-dev libclang-dev libfuse2 wget
 
       - name: Install libtorrent 2.1.1 (static)
         run: bash .github/scripts/install-libtorrent.sh
@@ -75,6 +81,37 @@ jobs:
           mkdir -p dist
           cp target/release/server dist/stream-server-linux-amd64
           chmod +x dist/stream-server-linux-amd64
+          ls -lh dist/
+
+      - name: Build AppImage (same static binary)
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
+          cp target/release/server AppDir/usr/bin/stream-server
+          cat > AppDir/usr/share/applications/stream-server.desktop << 'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Stream Server
+          Exec=stream-server
+          Icon=stream-server
+          Categories=Network;
+          EOF
+          # Simple placeholder icon (ImageMagick may not be installed)
+          printf '\x89PNG\r\n\x1a\n' > AppDir/usr/share/icons/hicolor/256x256/apps/stream-server.png || true
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --output appimage || true
+          ls -lh *.AppImage || true
+          # Normalize to release asset name
+          APPIMG="$(ls -t *.AppImage 2>/dev/null | head -n 1 || true)"
+          if [ -n "$APPIMG" ]; then
+            cp "$APPIMG" dist/stream-server-linux-amd64.AppImage
+            chmod +x dist/stream-server-linux-amd64.AppImage
+          else
+            echo "::warning::AppImage build produced no file, continuing with portable only"
+          fi
+
+      - name: Checksums
+        run: |
           (cd dist && sha256sum * > SHA256SUMS.txt)
           ls -lh dist/
 
@@ -84,9 +121,92 @@ jobs:
           name: quick-linux-static
           path: dist/*
 
+  build-arch:
+    name: Build Arch Linux package
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    env:
+      LIBTORRENT_STATIC: "1"
+      PKG_CONFIG_PATH: /usr/local/lib/pkgconfig
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --needed --noconfirm base-devel cmake curl rust git openssl pkg-config boost clang gtk3 libayatana-appindicator
+
+      - name: Install libtorrent 2.1.1 (static)
+        run: bash .github/scripts/install-libtorrent.sh
+
+      - name: Build server binary
+        run: cargo build --release -p server --features libtorrent --no-default-features
+
+      - name: Verify static linkage
+        run: |
+          ldd target/release/server || true
+          if ldd target/release/server 2>/dev/null | grep -qi "libtorrent"; then
+            echo "::error::Arch binary still links libtorrent dynamically"
+            exit 1
+          fi
+
+      - name: Create PKGBUILD + package
+        run: |
+          mkdir -p pkg
+          TAG_NAME="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            TAG_NAME="${{ inputs.version }}"
+          fi
+          PKGVER="$(echo "$TAG_NAME" | sed 's/^v//; s/-/_/g')"
+          if [ -z "$PKGVER" ] || [ "$PKGVER" = "master" ]; then
+            PKGVER="$(grep '^version' server/Cargo.toml | head -n1 | cut -d'"' -f2)"
+          fi
+          cp target/release/server pkg/stream-server
+          # settings-gui is optional for the quick Arch pkg (server-only workflow);
+          # include it when the full workspace build produced it.
+          if [ -f target/release/settings-gui ]; then
+            cp target/release/settings-gui pkg/settings-gui
+            SETTINGS_SRC='"settings-gui"'
+            SETTINGS_INSTALL='install -Dm755 "$srcdir/settings-gui" "$pkgdir/usr/bin/settings-gui"'
+          else
+            SETTINGS_SRC=''
+            SETTINGS_INSTALL=''
+          fi
+          cat > pkg/PKGBUILD << EOF
+          # Maintainer: stream-server maintainers (maintained fork)
+          pkgname=stream-server
+          pkgver=${PKGVER:-0.1.8}
+          pkgrel=1
+          pkgdesc="High-performance torrent streaming server with HLS transcoding (static libtorrent)"
+          arch=('x86_64')
+          url="https://github.com/${GITHUB_REPOSITORY}"
+          license=('MIT')
+          depends=('openssl' 'boost-libs' 'gcc-libs' 'glibc')
+          source=("stream-server" ${SETTINGS_SRC})
+          sha256sums=('SKIP' 'SKIP')
+
+          package() {
+              install -Dm755 "\$srcdir/stream-server" "\$pkgdir/usr/bin/stream-server"
+              ${SETTINGS_INSTALL}
+          }
+          EOF
+          cat pkg/PKGBUILD
+          cd pkg
+          # makepkg refuses root; use dedicated builder user like full release
+          useradd -m builder || true
+          chown -R builder:builder .
+          su builder -c "makepkg -sf --noconfirm"
+          ls -lh *.pkg.tar.zst
+
+      - name: Upload Arch package
+        uses: actions/upload-artifact@v7
+        with:
+          name: quick-arch-pkg
+          path: pkg/*.pkg.tar.zst
+
   release:
     name: Create Quick Release
-    needs: [build-linux-static]
+    needs: [build-linux-static, build-arch]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -95,11 +215,26 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download artifact
+      - name: Download artifacts
         uses: actions/download-artifact@v8
         with:
-          name: quick-linux-static
+          pattern: quick-*
           path: release
+          merge-multiple: true
+
+      - name: Normalize + checksums
+        run: |
+          ls -R release || true
+          # Flatten if download created subdirs (merge-multiple should avoid this, defensive)
+          find release -mindepth 2 -type f -exec mv -n {} release/ \; 2>/dev/null || true
+          # Normalize Arch pkg name to stable asset name
+          ARCHPKG="$(find release -maxdepth 1 -type f -name 'stream-server-*.pkg.tar.zst' | sort -V | tail -n 1 || true)"
+          if [ -n "$ARCHPKG" ]; then
+            cp "$ARCHPKG" release/stream-server-arch-x86_64.pkg.tar.zst
+          fi
+          rm -f release/SHA256SUMS.txt
+          (cd release && sha256sum * > SHA256SUMS.txt)
+          ls -lh release/
 
       - name: Resolve tag
         id: reltag
@@ -126,11 +261,24 @@ jobs:
 
           ### Install (Linux x86_64)
 
+          Portable:
           \`\`\`bash
           # Download stream-server-linux-amd64 from this release
           chmod +x stream-server-linux-amd64
           ./stream-server-linux-amd64
           # server starts on http://localhost:11470
+          \`\`\`
+
+          AppImage:
+          \`\`\`bash
+          chmod +x stream-server-linux-amd64.AppImage
+          ./stream-server-linux-amd64.AppImage
+          \`\`\`
+
+          Arch Linux:
+          \`\`\`bash
+          sudo pacman -U stream-server-arch-x86_64.pkg.tar.zst
+          stream-server
           \`\`\`
 
           Verify with \`SHA256SUMS.txt\`.

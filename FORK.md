@@ -96,9 +96,11 @@ supported for the server binary (only `enginefs` library builds with that flag).
 
 ## How to cut a release from this fork
 
-### Quick release (Linux static only, ~10-12 min)
+### Quick release (Linux static only, ~12-15 min)
 
-Best when you just need a working Linux binary *now*.
+Best when you just need a working Linux binary *now*. Produces
+`stream-server-linux-amd64`, `stream-server-linux-amd64.AppImage`,
+`stream-server-arch-x86_64.pkg.tar.zst` + `SHA256SUMS.txt`.
 
 - Via UI: **Actions → “Fork Quick Release (Linux static)” → Run workflow →**
   enter `version` e.g. `v0.1.8-fork.1` → Run.
