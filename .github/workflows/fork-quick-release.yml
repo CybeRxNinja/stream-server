@@ -167,9 +167,11 @@ jobs:
           if [ -f target/release/settings-gui ]; then
             cp target/release/settings-gui pkg/settings-gui
             SETTINGS_SRC='"settings-gui"'
+            SETTINGS_SUMS="'SKIP' 'SKIP'"
             SETTINGS_INSTALL='install -Dm755 "$srcdir/settings-gui" "$pkgdir/usr/bin/settings-gui"'
           else
             SETTINGS_SRC=''
+            SETTINGS_SUMS="'SKIP'"
             SETTINGS_INSTALL=''
           fi
           cat > pkg/PKGBUILD << EOF
@@ -183,7 +185,7 @@ jobs:
           license=('MIT')
           depends=('openssl' 'boost-libs' 'gcc-libs' 'glibc')
           source=("stream-server" ${SETTINGS_SRC})
-          sha256sums=('SKIP' 'SKIP')
+          sha256sums=(${SETTINGS_SUMS})
 
           package() {
               install -Dm755 "\$srcdir/stream-server" "\$pkgdir/usr/bin/stream-server"
