@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Stream Server
+Comment=High-performance torrent/HLS streaming server (Stremio backend, http://127.0.0.1:11470)
+Exec=/usr/bin/stream-server --no-tray
+TryExec=/usr/bin/stream-server
+Icon=stream-server
+Terminal=false
+Type=Application
+Categories=Network;
+Keywords=stremio;stream;server;torrent;hls;
+StartupNotify=false

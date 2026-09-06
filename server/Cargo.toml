@@ -120,6 +120,8 @@ priority = "optional"
 assets = [
     ["target/release/server", "usr/bin/stream-server", "755"],
     ["target/release/settings-gui", "usr/bin/settings-gui", "755"],
+    ["../packaging/stream-server.desktop", "usr/share/applications/stream-server.desktop", "644"],
+    ["../icons/icon_48.png", "usr/share/icons/hicolor/48x48/apps/stream-server.png", "644"],
 ]
 
 [package.metadata.wix]

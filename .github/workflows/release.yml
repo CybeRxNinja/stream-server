@@ -373,18 +373,22 @@ jobs:
           url="https://github.com/${GITHUB_REPOSITORY}"
           license=('MIT')
           depends=('openssl' 'boost-libs' 'gcc-libs' 'glibc')
-          source=("stream-server" "settings-gui")
-          sha256sums=('SKIP' 'SKIP')
+          source=("stream-server" "settings-gui" "stream-server.desktop" "stream-server.png")
+          sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
 
           package() {
               install -Dm755 "\$srcdir/stream-server" "\$pkgdir/usr/bin/stream-server"
               install -Dm755 "\$srcdir/settings-gui" "\$pkgdir/usr/bin/settings-gui"
+              install -Dm644 "\$srcdir/stream-server.desktop" "\$pkgdir/usr/share/applications/stream-server.desktop"
+              install -Dm644 "\$srcdir/stream-server.png" "\$pkgdir/usr/share/icons/hicolor/48x48/apps/stream-server.png"
           }
           EOF
           cat pkg/PKGBUILD
 
           cp target/release/server pkg/stream-server
           cp target/release/settings-gui pkg/settings-gui
+          cp packaging/stream-server.desktop pkg/stream-server.desktop
+          cp icons/icon_48.png pkg/stream-server.png
 
       - name: Build package
         run: |

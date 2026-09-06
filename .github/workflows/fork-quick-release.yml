@@ -162,16 +162,18 @@ jobs:
             PKGVER="$(grep '^version' server/Cargo.toml | head -n1 | cut -d'"' -f2)"
           fi
           cp target/release/server pkg/stream-server
+          cp packaging/stream-server.desktop pkg/stream-server.desktop
+          cp icons/icon_48.png pkg/stream-server.png
           # settings-gui is optional for the quick Arch pkg (server-only workflow);
           # include it when the full workspace build produced it.
           if [ -f target/release/settings-gui ]; then
             cp target/release/settings-gui pkg/settings-gui
             SETTINGS_SRC='"settings-gui"'
-            SETTINGS_SUMS="'SKIP' 'SKIP'"
+            SETTINGS_SUMS="'SKIP' 'SKIP' 'SKIP' 'SKIP'"
             SETTINGS_INSTALL='install -Dm755 "$srcdir/settings-gui" "$pkgdir/usr/bin/settings-gui"'
           else
             SETTINGS_SRC=''
-            SETTINGS_SUMS="'SKIP'"
+            SETTINGS_SUMS="'SKIP' 'SKIP' 'SKIP'"
             SETTINGS_INSTALL=''
           fi
           cat > pkg/PKGBUILD << EOF
@@ -184,11 +186,13 @@ jobs:
           url="https://github.com/${GITHUB_REPOSITORY}"
           license=('MIT')
           depends=('openssl' 'boost-libs' 'gcc-libs' 'glibc')
-          source=("stream-server" ${SETTINGS_SRC})
+          source=("stream-server" "stream-server.desktop" "stream-server.png" ${SETTINGS_SRC})
           sha256sums=(${SETTINGS_SUMS})
 
           package() {
               install -Dm755 "\$srcdir/stream-server" "\$pkgdir/usr/bin/stream-server"
+              install -Dm644 "\$srcdir/stream-server.desktop" "\$pkgdir/usr/share/applications/stream-server.desktop"
+              install -Dm644 "\$srcdir/stream-server.png" "\$pkgdir/usr/share/icons/hicolor/48x48/apps/stream-server.png"
               ${SETTINGS_INSTALL}
           }
           EOF
