@@ -10,7 +10,10 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{
+    cors::{Any, CorsLayer},
+    trace::TraceLayer,
+};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 pub const DEFAULT_HTTP_PORT: u16 = 11470;
@@ -887,8 +890,43 @@ pub fn build_router(state: AppState) -> Router {
                 )
             }),
         )
-        .layer(CorsLayer::permissive())
+        // Fix for web.stremio.com (https) -> http://127.0.0.1:11470 fetches failing with:
+        // "blocked by CORS policy: Permission was denied for this request to access
+        //  the `loopback` address space" (Chrome Private/Local Network Access).
+        // Browsers send a preflight with `Access-Control-Request-Private-Network: true`
+        // and require `Access-Control-Allow-Private-Network: true` in response.
+        // Newer Chrome also checks `Access-Control-Allow-Local-Network: true`.
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any)
+                .expose_headers(Any)
+                .allow_private_network(true),
+        )
+        .layer(axum::middleware::from_fn(
+            private_network_headers_middleware,
+        ))
         .with_state(state)
+}
+
+/// Adds Private/Local Network Access opt-in headers on every response so that
+/// `https://web.stremio.com` is allowed to fetch the loopback server.
+/// `CorsLayer::allow_private_network(true)` already handles preflights, but
+/// tower-http 0.7 has no `allow_local_network` yet, so set both explicitly here
+/// for Chrome 138+ (`Allow-Local-Network`) and older PNA enforcement.
+async fn private_network_headers_middleware(
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut res = next.run(req).await;
+    let headers = res.headers_mut();
+    // HeaderValue parsing cannot fail for these literals; ignore errors defensively.
+    if let Ok(v) = axum::http::HeaderValue::from_str("true") {
+        headers.insert("Access-Control-Allow-Private-Network", v.clone());
+        headers.insert("Access-Control-Allow-Local-Network", v);
+    }
+    res
 }
 
 async fn root_redirect(State(state): State<AppState>) -> Redirect {
